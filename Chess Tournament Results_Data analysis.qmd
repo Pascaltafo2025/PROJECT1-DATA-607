@@ -1,0 +1,230 @@
+---
+title: "PROJECT 1: Chess Tournament Results: Data extraction and Parsing"
+author: "Pascal Hermann Kouogang Tafo"
+format: html
+editor: visual
+---
+
+**INTRODUCTION**
+
+In this project, we will manipulate a structured chess tournament file that contains the result of 64 players. Our goal is to extract some meaningful players data including player's name, state, total tournament points, pre-tournament rating, the average pre-tournament rating of all opponents they faced and then export into a clean, relational CSV file.
+
+**APPROACH**
+
+The text file contains data which are pipe-delimited (`|`) and interleaved across two lines per player. To accomplish my goal, i will take the following steps:
+
+-   Read the file and strip out the dashed separators pairing consecutive player rows.
+
+-   Extract each field of interest (Name, State, Points, and Pre-Rating) using regular expressions and string parsing functions.
+
+-   Create a lookup table because the opponents are listed by "Pair Number" rather than name and perform a second iteration through each player's round results, match their opponents' IDs to their respective Pre-Ratings
+
+-   Compute the rounded mean for the average opponent rating column
+
+-   Export the final results into a clean CSV file
+
+## Install and Load R packages
+
+```{r }
+
+library(stringr)
+library(dplyr)
+library(readr)
+
+```
+
+## Read the raw text file
+
+```{r Read-file}
+
+url <- "https://raw.githubusercontent.com/Pascaltafo2025/PROJECT1-DATA-607/refs/heads/main/tournamentinfo.txt"
+
+rawdata_Chess_tournament <- readLines(url)
+  
+head(rawdata_Chess_tournament,10)
+
+```
+
+## Let's clean our raw data.
+
+In order to clean our raw data, we will have to remove the dashed lined that divide rows using the "grep" function. The grep will help us identifies the index of every line. In our case, we will be looking at every line that starts with a long string of dashes and try to exclude them.
+
+```{r Clean-data}
+
+clean_data_Chess_tournament <- rawdata_Chess_tournament[!grepl("^-+$", rawdata_Chess_tournament)] 
+
+
+glimpse(clean_data_Chess_tournament)
+head(clean_data_Chess_tournament,10)
+```
+
+## Extract fields of interest
+
+Here, we would like to extract the field that we will be necessary to complete our goal. Those fields of interest are player's name, state, total tournament points, pre-tournament rating. To successfully extract those specific data, we will use regular expressions which are use to match patterns in text and help extract data from a string. After removing the dashed lines, our cleaned chess tournament results data consist of a header (the first 2 rows) followed by consecutive row pairs for each player. We will aim to combine these 2 rows.
+
+Here i use the help of "**Claude Sonnet 4.6**" for the code.
+
+![](Fields%20extraction.png){width="377"}
+
+```{r}
+
+# 1. Remove the headers of the data
+
+#The first two lines of our "clean_data_Chess_tournament" file contains the data headers so we can get ride of or skip them and only keep players data to simplify the fields extraction.
+
+Players_DataInfo <- clean_data_Chess_tournament[-(1:2)]
+
+head(Players_DataInfo,10)
+```
+
+```{r}
+
+# 1) Let's split the row pairs for each player
+
+row1 <- Players_DataInfo[seq(1, length(Players_DataInfo), by = 2)]
+row2 <- Players_DataInfo[seq(2, length(Players_DataInfo), by = 2)]
+
+# 2) Let's extract each field of interest:
+
+# Player's Name: They are located between the first and second pipe (|).
+
+Name <- str_trim(str_extract(row1, "(?<=\\|)[^|]+(?=\\|)"))
+
+# Player's State: It is represented by the two-letter code at the beginning of the second row.
+
+State <- str_extract(row2, "([A-Z]{2})")
+
+# Player's Total Points: It represents the first number after the second pipe in the first row
+
+Total_Points <- as.numeric(str_extract(row1, "(?<=\\|)\\s*\\d+\\.\\d+"))
+
+
+# Player's Pre-Rating: It is located after "R: " in the second row. 
+
+Pre_rating <- as.integer(str_extract(row2, "(?<=R:\\s{0,4})\\d+"))
+
+# Let's combine all our field of interest into a data frame for a better visual
+
+
+PlayerDataInfo_df <- data.frame(
+  Name       = Name,
+  State      = State,
+  Points     = Total_Points,
+  Pre_Rating = Pre_rating,
+  stringsAsFactors = FALSE
+)
+
+head(PlayerDataInfo_df,10)
+```
+
+We obtain a table that contains all the 64 players Name, State, Points and Pre-ratings. Now we should try to calculate Average Pre Chess Rating of Opponents to complete our data frame. To calculate the average opponents rating, we will treat our data as a database where the Pair Number acts as the Primary Key because the raw text file is structured like two separate, but related, tables that have been flattened into one.
+
+## COMPUTE the Average Opponent pre-rating for each player
+
+Since the opponents are listed by "Pair Number" rather than name, we will first map every Pair Number to its corresponding Pre-Rating (Lookup Table), then For each player, find the Pair Numbers of their opponents, look up those ratings, and finally calculate the average Opponent pre-rating for each player.
+
+Here i use the help of "**Gemini 3**" for the code:
+
+![](calculate%20the%20average%20opponent%20rating.png){width="412"}
+
+![](Average%20opponents%20rating.png){width="367"}
+
+```{r}
+
+## 1. Let's create the Lookup Table 
+  
+# The 'Pair Number' represents the row index 1 to 64.
+
+lookup_table <- data.frame(
+  PairNum = 1:length(Pre_rating),
+  Rating = Pre_rating
+)
+
+## 2. Let's extract Opponent Pair Numbers using regular expressions
+
+# Opponents are in Row 1, following the "W", "L", or "D" indicators.
+
+opponents_list <- str_extract_all(row1, "(?<=[WLD]\\s{1,5})\\d+")
+
+## 3. Match Opponents to Ratings and Calculate the average Opponent pre-rating
+
+Avg_Opp_Rating <- sapply(opponents_list, function(opp_ids) {
+  # Convert extracted strings to integers
+  ids <- as.numeric(opp_ids)
+  
+  # Filter out any NAs (in case of byes or unplayed games)
+  ids <- ids[!is.na(ids)]
+  
+  # Look up ratings for these IDs from our lookup_table
+  opp_ratings <- lookup_table$Rating[match(ids, lookup_table$PairNum)]
+  
+  
+## 4. Calculate the average Opponent pre-rating (rounding to the nearest whole number)
+  
+  return(round(mean(opp_ratings, na.rm = TRUE)))
+})
+
+
+## 5. Final Data Frame
+
+Final_tournament_PlayersInfo_df <- data.frame(
+  PlayerName = Name,
+  State = State,
+  TotalPoints = Total_Points,
+  PreRating = Pre_rating,
+  AvgOpponentRating = Avg_Opp_Rating,
+  stringsAsFactors = FALSE
+)
+
+head(Final_tournament_PlayersInfo_df,10)
+
+
+```
+
+## Export the final results into a clean CSV file
+
+```{r export-csv}
+
+write.csv(Final_tournament_PlayersInfo_df, "Final_tournament_PlayersInfo.csv", row.names = FALSE)
+
+
+```
+
+## Create the scatter plot Pre-Rating vs. Average Opponent Rating
+
+Here i use the help of "**Gemini 3**" for the code
+
+![](Scatter%20Plot%20prompt.png){width="427"}
+
+![](Scatter%20Plot%20code.png){width="456"}
+
+```{r plot}
+
+library(ggplot2)
+
+
+# Create the scatter plot
+
+ggplot(Final_tournament_PlayersInfo_df, aes(x = PreRating, y = AvgOpponentRating)) +
+  geom_point(color = "blue", size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", color = "darkorange", se = FALSE) + # Add a trend line
+  labs(
+    title = "Player Pre-Rating vs. Average Opponent Rating",
+    subtitle = "Analysis of Tournament Pairings",
+    x = "Player Pre-Rating",
+    y = "Average Opponent Rating"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    axis.title = element_text(size = 11)
+  )
+
+
+```
+
+The trend line on the scatter plot has a positive slope which indicates that as a player’s Pre-Rating increases, the Average Opponent Rating also increases overall. This relationship proves that the tournament successfully avoided "mismatches", ensuring a competitive experience for all skill tiers
+
+# CONCLUSION
+
+The analysis of the tournament data reveals a strong structural correlation between player performance and schedule difficulty which demonstrates a high level of pairing integrity. we can conclude by saying that players final scores were earned against statistically appropriate opposition.
